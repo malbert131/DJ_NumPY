@@ -9,6 +9,7 @@ verify_ssl = true
 spotipy = "*"
 ipykernel = "*"
 pandas = "*"
+scikit-learn = "*"
 
 [requires]
 python_version = "3.9"
