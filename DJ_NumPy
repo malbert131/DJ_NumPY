@@ -1,0 +1,160 @@
+# To add a new cell, type '# %%'
+# To add a new markdown cell, type '# %% [markdown]'
+# %%
+from IPython import get_ipython
+
+# %%
+from keys import client_id
+from keys import client_secret
+from keys import user_name
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+import spotipy.util as util
+
+scope = 'user-library-read playlist-modify-public playlist-read-private user-read-recently-played app-remote-control user-top-read'
+
+redirect_uri = 'https://developer.spotify.com/dashboard/applications/0743a195f7654b5ab95560a95e89316a'
+
+client_credentials_manager = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
+
+sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+
+token = util.prompt_for_user_token(user_name, scope, client_id, client_secret, redirect_uri)
+
+if token:
+    sp = spotipy.Spotify(auth=token)
+else:
+    print("NO TOKEN FOUND")
+
+
+# %%
+import pandas as pd 
+
+user_top_tracks = sp.current_user_top_tracks(limit=50, offset=0, time_range='medium_term')
+song_data = user_top_tracks["items"]
+
+song_ids = []
+song_names = []
+
+for i in range(0, len(song_data)):
+    if song_data[i]['id'] != None:
+        song_ids.append(song_data[i]['id'])
+        song_names.append(song_data[i]['name'])
+
+#fix feature data
+song_features = []
+for i in range(0, len(song_ids)):
+    features = sp.audio_features(song_ids[i])
+    for feat in features:
+        song_features.append(feat)
+
+
+top_tracks_df = pd.DataFrame(song_features, index=song_names)
+top_tracks_df = top_tracks_df[["id", "acousticness", "danceability", "duration_ms", 
+                         "energy", "instrumentalness",  "key", "liveness",
+                         "loudness", "mode", "speechiness", "tempo", "valence"]]
+
+
+# %%
+top_tracks_df.head()
+
+
+# %%
+#Vectorizes the song names
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+vectorizer = TfidfVectorizer(sublinear_tf=True, ngram_range=(1, 6), max_features=10000)
+X_names_sparse = vectorizer.fit_transform(song_names)
+X_names_sparse.shape
+
+
+# %%
+#rank data manually from 1-10 based on how much I like the song (10 is most liked)
+import numpy as np 
+top_tracks_df['rating'] = [9, 7, 7, 8, 6, 8, 9, 10, 7, 10, 8, 7, 6, 10, 8, 10, 7, 8, 8, 8, 7, 5, 9, 5, 9, 10, 8, 9, 9, 10, 6, 8, 9, 9, 6, 7, 6, 7, 7, 8, 5, 9, 10, 7, 8, 9, 6, 9, 6, 6]
+print(len(top_tracks_df))
+
+
+# %%
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+
+X_data_train = top_tracks_df.drop(['id', 'rating'], axis=1)
+Y_data_train = top_tracks_df['rating']
+feature_classifier = RandomForestClassifier(random_state=42, max_depth=5, max_features=12)
+feature_classifier.fit(X_data_train, Y_data_train)
+feature_importance = feature_classifier.feature_importances_
+index =  np.argsort(feature_importance)[::-1]
+
+for i in range(len(feature_importance)):
+    print("%d. %s %f " % (i + 1, X_data_train.columns[i], feature_importance[index[i]]))
+
+
+# %%
+from sklearn import decomposition
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set(style='white')
+get_ipython().run_line_magic('matplotlib', 'inline')
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
+
+X_data_train_scaled = StandardScaler().fit_transform(X_data_train)
+
+pca = decomposition.PCA().fit(X_data_train_scaled)
+
+plt.figure(figsize=(5,3))
+plt.plot(np.cumsum(pca.explained_variance_ratio_), color='k', lw=2)
+plt.xlabel('Number of components')
+plt.ylabel('Total explained variance')
+plt.xlim(0, 12)
+plt.yticks(np.arange(0, 1.1, 0.1))
+plt.axvline(9, c='b')
+plt.axhline(0.95, c='r')
+
+
+# %%
+#fit dataset to optimal PCA of 9 components
+pca1 = decomposition.PCA(n_components=9)
+X_pca = pca1.fit_transform(X_data_train_scaled)
+
+
+# %%
+# #optional to use t-SNE over PCA for data dimensionality reduction
+# from sklearn.manifold import TSNE
+
+# tsne = TSNE(random_state=17)
+# X_tsne = tsne.fit_transform(X_data_train_scaled)
+
+
+# %%
+# Stacks PCA song feature data and vectorized song names
+from scipy.sparse import csr_matrix, hstack
+
+X_train_stacked = csr_matrix(hstack([X_pca, X_names_sparse]))
+
+
+# %%
+from sklearn.model_selection import StratifiedKFold, GridSearchCV
+import warnings
+warnings.filterwarnings('ignore')
+
+# Initialize a stratified split for the validation process
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+
+# %%
+# Random forest model
+parameter_list = {'max_features': [4, 7, 8, 9, 10, 11], 'min_samples_leaf': [1, 3, 5, 8], 'max_depth': [3, 5, 8]}
+rfc_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, oob_score=True)
+# GridSearchCV test to find best parameters for rfc_model
+gcv1 = GridSearchCV(rfc_model, parameter_list, n_jobs=-1, cv=skf, verbose=1)
+gcv1.fit(X_train_stacked, Y_data_train)
+
+# # Finds best parameters, Finds cross-validation score
+gcv1.best_score_, gcv1.best_estimator_
+
+
+# %%
+
+
+
