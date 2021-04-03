@@ -13,6 +13,7 @@ scikit-learn = "*"
 numpy = "*"
 matplotlib = "*"
 seaborn = "*"
+sklearn = "*"
 
 [requires]
 python_version = "3.9"
